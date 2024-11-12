@@ -174,8 +174,14 @@ jobs:
         buildDirectory: "${{ github.workspace }}/build"
         buildWithCMake: true
         buildWithCMakeArgs: --config Release
-        # cmakeAppendedArgs: " -DCODE_COVERAGE=OFF -DBUILD_SHELL=OFF -DBUILD_TEST_EXAMPLE=OFF -DBUILD_STATIC"
-        cmakeAppendedArgs: " -DCODE_COVERAGE=OFF -DBUILD_SHELL=OFF -DBUILD_TEST_EXAMPLE=OFF"
+        cmakeAppendedArgs: >-
+          -DCMAKE_SYSTEM_NAME=Linux
+          -DCMAKE_SYSTEM_PROCESSOR=aarch64
+          -DCMAKE_C_COMPILER=${{ matrix.xcc }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.xcc_pkg }}-g++
+          -DCODE_COVERAGE=OFF
+          -DBUILD_SHELL=OFF
+          -DBUILD_TEST_EXAMPLE=OFF
     - name: "Check file existence"
       uses: andstor/file-existence-action@v1
       with:
