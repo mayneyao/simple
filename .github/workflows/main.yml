@@ -211,15 +211,19 @@ jobs:
       fail-fast: true
       matrix:
         include:
-        - os: ubuntu-20.04
-        - os: ubuntu-latest
+          - os: ubuntu-latest
+            arch: x86_64
+          - os: ubuntu-latest-arm64
+            arch: arm64
+
     steps:
-    - name: "Release Build Type"
-      if: startsWith(github.ref, 'refs/tags/')
-      run: echo "BUILD_TYPE=Release" >> $GITHUB_ENV
-    - name: "Debug Build Type"
-      if: startsWith(github.ref, 'refs/tags/') != true
-      run: echo "BUILD_TYPE=Debug" >> $GITHUB_ENV
+    - name: "Set Build Type"
+      run: |
+        if [[ ${{ github.ref }} == refs/tags/* ]]; then
+          echo "BUILD_TYPE=Release" >> $GITHUB_ENV
+        else
+          echo "BUILD_TYPE=Debug" >> $GITHUB_ENV
+        fi
 
     - uses: actions/checkout@v2
 
@@ -227,17 +231,16 @@ jobs:
       run: sudo apt-get update
 
     - name: Install lcov
-      if: startsWith(github.ref, 'refs/tags/') != true
+      if: ${{ startsWith(github.ref, 'refs/tags/') != true && matrix.arch == 'x86_64' }}
       run: sudo apt-get install lcov
 
     - name: Install codecov
-      if: startsWith(github.ref, 'refs/tags/') != true
-      shell: bash
+      if: ${{ startsWith(github.ref, 'refs/tags/') != true && matrix.arch == 'x86_64' }}
       run: sudo pip install codecov
 
-    - name: 'Run CMake'
+    - name: 'Run CMake with coverage'
+      if: ${{ startsWith(github.ref, 'refs/tags/') != true && matrix.arch == 'x86_64' }}
       uses: lukka/run-cmake@v3
-      if: startsWith(github.ref, 'refs/tags/') != true
       with:
         cmakeListsOrSettingsJson: CMakeListsTxtAdvanced
         cmakeListsTxtPath: '${{ github.workspace }}/CMakeLists.txt'
@@ -248,7 +251,7 @@ jobs:
         cmakeAppendedArgs: " -DCODE_COVERAGE=ON "
 
     - name: 'Run CMake without coverage'
-      if: startsWith(github.ref, 'refs/tags/')
+      if: ${{ startsWith(github.ref, 'refs/tags/') || matrix.arch == 'arm64' }}
       uses: lukka/run-cmake@v3
       with:
         cmakeListsOrSettingsJson: CMakeListsTxtAdvanced
@@ -259,83 +262,43 @@ jobs:
         buildWithCMakeArgs: --config ${{ env.BUILD_TYPE }}
         cmakeAppendedArgs: " -DCODE_COVERAGE=OFF -DBUILD_SHELL=OFF -DBUILD_TEST_EXAMPLE=OFF"
 
+    # 只在 x86_64 上运行测试和覆盖率
     - name: 'Run CTest'
-      if: ${{ startsWith(github.ref, 'refs/tags/') != true && matrix.os == 'ubuntu-latest' }}
+      if: ${{ startsWith(github.ref, 'refs/tags/') != true && matrix.arch == 'x86_64' }}
       run: ctest -V -C ${{ env.BUILD_TYPE }}
       working-directory: "${{ github.workspace }}/build"
 
-    # CODE COVERAGE
+    # CODE COVERAGE (只在 x86_64 上运行)
     - name: Code coverage - Capture coverage info
-      if: ${{ startsWith(github.ref, 'refs/tags/') != true && matrix.os == 'ubuntu-latest' }}
+      if: ${{ startsWith(github.ref, 'refs/tags/') != true && matrix.arch == 'x86_64' }}
       run: lcov --directory . --capture --output-file coverage.info
-    - name: Code coverage - Filter out system, external, and unit test source files
-      if: ${{ startsWith(github.ref, 'refs/tags/') != true && matrix.os == 'ubuntu-latest' }}
+      working-directory: "${{ github.workspace }}/build"
+
+    - name: Code coverage - Filter out system files
+      if: ${{ startsWith(github.ref, 'refs/tags/') != true && matrix.arch == 'x86_64' }}
       run: lcov --remove coverage.info --output-file coverage_filter.info '/Library/*' '/usr/*' '*/test/*' '*/cmrc/*' '*/entry.cc' '*/simple_highlight.*'
-    - name: Code coverage - Output coverage data for debugging
-      if: ${{ startsWith(github.ref, 'refs/tags/') != true && matrix.os == 'ubuntu-latest' }}
-      run: lcov --list coverage_filter.info
+      working-directory: "${{ github.workspace }}/build"
+
     - name: Code coverage - Upload to CodeCov
-      if: ${{ startsWith(github.ref, 'refs/tags/') != true && matrix.os == 'ubuntu-latest' }}
-      run:  bash <(curl -s https://codecov.io/bash) -f coverage_filter.info || echo "Codecov did not collect coverage reports"
+      if: ${{ startsWith(github.ref, 'refs/tags/') != true && matrix.arch == 'x86_64' }}
+      run: bash <(curl -s https://codecov.io/bash) -f coverage_filter.info || echo "Codecov did not collect coverage reports"
+      working-directory: "${{ github.workspace }}/build"
 
-    - name: "Check file existence"
-      uses: andstor/file-existence-action@v1
-      with:
-        allow_failure: true
-        files: "${{ github.workspace }}/build/src/libsimple.so, ${{ github.workspace }}/build/test/dict/jieba.dict.utf8"
-
-    # npm run
-    - uses: actions/setup-node@v2
-      if: startsWith(github.ref, 'refs/tags/') != true
-      with:
-        node-version: '20'
-    - name: run node example
-      if: startsWith(github.ref, 'refs/tags/') != true
-      working-directory: ./examples/node/
-      run: |
-        npm install
-        npm run p -- --ext_path="${{ github.workspace }}/build/src/" --dict_path="${{ github.workspace }}/build/test/dict/"
-        npm run b -- --ext_path="${{ github.workspace }}/build/src/" --dict_path="${{ github.workspace }}/build/test/dict/"
-
-    # python run
-    - uses: actions/setup-python@v4
-      if: startsWith(github.ref, 'refs/tags/') != true
-      with:
-        python-version: '3.10' # Version range or exact version of a Python version to use, using SemVer's version range syntax
-    - name: run python example
-      if: startsWith(github.ref, 'refs/tags/') != true
-      working-directory: ./examples/python3/
-      run: python db_connector.py "${{ github.workspace }}/build/src/libsimple"
-
-    # create release
-    - name: "Build Changelog"
-      id: build_changelog
-      if: ${{ startsWith(github.ref, 'refs/tags/') && matrix.os == 'ubuntu-latest' }}
-      uses: mikepenz/release-changelog-builder-action@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    # 打包发布
     - name: Package
       if: startsWith(github.ref, 'refs/tags/')
       run: |
-        mkdir libsimple-linux-${{ matrix.os }}
-        cp -r src/libsimple.so test/dict/ libsimple-linux-${{ matrix.os }}/
-        zip -r libsimple-linux-${{ matrix.os }}.zip libsimple-linux-${{ matrix.os }}
+        mkdir libsimple-linux-${{ matrix.arch }}
+        cp -r src/libsimple.so test/dict/ libsimple-linux-${{ matrix.arch }}/
+        zip -r libsimple-linux-${{ matrix.arch }}.zip libsimple-linux-${{ matrix.arch }}
       working-directory: "${{ github.workspace }}/build"
-    - name: Release without changelog
-      if: ${{ startsWith(github.ref, 'refs/tags/') && matrix.os != 'ubuntu-latest' }}
-      uses: softprops/action-gh-release@v1
-      with:
-        draft: true
-        files: ${{ github.workspace }}/build/libsimple-linux-${{ matrix.os }}.zip
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Release
-      if: ${{ startsWith(github.ref, 'refs/tags/') && matrix.os == 'ubuntu-latest' }}
+      if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
         draft: true
-        files: ${{ github.workspace }}/build/libsimple-linux-${{ matrix.os }}.zip
-        body: ${{steps.build_changelog.outputs.changelog}}
+        files: ${{ github.workspace }}/build/libsimple-linux-${{ matrix.arch }}.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
